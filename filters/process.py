@@ -5,6 +5,7 @@ from filters.replace_filter import ReplaceFilter
 from filters.ai_filter import AIFilter
 from filters.info_filter import InfoFilter
 from filters.media_filter import MediaFilter
+from filters.link_filter import LinkFilter
 from filters.sender_filter import SenderFilter
 from filters.delete_original_filter import DeleteOriginalFilter
 from filters.delay_filter import DelayFilter
@@ -45,6 +46,9 @@ async def process_forward_rule(client, event, chat_id, rule):
     
     # 添加替换过滤器
     filter_chain.add_filter(ReplaceFilter())
+
+    # 删除超链接
+    filter_chain.add_filter(LinkFilter())
 
     # 添加媒体过滤器（处理媒体内容）
     filter_chain.add_filter(MediaFilter())
