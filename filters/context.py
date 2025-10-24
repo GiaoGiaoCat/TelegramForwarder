@@ -41,10 +41,10 @@ class MessageContext:
         
         # 原始链接
         self.original_link = ''
-        
-        # 按钮
-        self.buttons = event.message.buttons if hasattr(event.message, 'buttons') else None
-        
+
+        # 按钮（不传递原始消息的按钮，但保留评论区按钮等功能）
+        self.buttons = None
+
         # 是否继续处理
         self.should_forward = True
         
