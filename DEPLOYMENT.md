@@ -167,11 +167,3 @@ chmod 700 sessions/
 
 # 启用 Telegram 两步验证
 ```
-
----
-
-## 参考文档
-
-- [README.md](./README.md) - 功能说明和使用指南
-- [CLAUDE.md](./CLAUDE.md) - 项目架构文档
-- [GitHub Issues](https://github.com/GiaoGiaoCat/TelegramForwarder/issues) - 问题反馈
