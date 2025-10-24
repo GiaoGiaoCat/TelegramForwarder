@@ -8,13 +8,24 @@ ENV DOCKER_LOG_MAX_SIZE=10m
 ENV DOCKER_LOG_MAX_FILE=3
 
 # 安装系统依赖
-RUN apt-get update && apt-get install -y \
-    tzdata \
+RUN set -eux; \
+    if [ -f /etc/apt/sources.list ]; then \
+        sed -i 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list; \
+        sed -i 's|http://security.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list; \
+    fi; \
+    if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' /etc/apt/sources.list.d/debian.sources; \
+        sed -i 's|http://security.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' /etc/apt/sources.list.d/debian.sources; \
+    fi; \
+    apt-get clean && rm -rf /var/lib/apt/lists/* \
+    && apt-get update --fix-missing \
+    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        tzdata \
+        gcc \
+        python3-dev \
     && ln -fs /usr/share/zoneinfo/Asia/Shanghai /etc/localtime \
     && dpkg-reconfigure -f noninteractive tzdata \
-    && apt-get install -y \
-    gcc \
-    python3-dev \
+    && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # 复制依赖文件并安装
