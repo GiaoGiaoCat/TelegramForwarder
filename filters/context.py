@@ -31,6 +31,7 @@ class MessageContext:
         
         # 记录处理过程中的媒体文件
         self.media_files = []
+        self.media_metadata = {}
         
         # 记录发送者信息
         self.sender_info = ''

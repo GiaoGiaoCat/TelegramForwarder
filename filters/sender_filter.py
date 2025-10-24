@@ -1,8 +1,11 @@
 import logging
 import os
+from telethon import types, functions, utils
 from filters.base_filter import BaseFilter
 from enums.enums import PreviewMode
 from telethon.errors import FloodWaitError
+from utils.constants import TEMP_DIR
+from utils.media import collect_media_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -131,11 +134,22 @@ class SenderFilter(BaseFilter):
         # 如果有可以发送的媒体，作为一个组发送
         files = []
         try:
+            file_to_message = {}
             for message in context.media_group_messages:
-                if message.media:
-                    file_path = await message.download_media(os.path.join(os.getcwd(), 'temp'))
-                    if file_path:
-                        files.append(file_path)
+                if not message.media:
+                    continue
+
+                file_path = await message.download_media(TEMP_DIR)
+                if not file_path:
+                    continue
+
+                files.append(file_path)
+                file_to_message[file_path] = message
+
+                metadata = await collect_media_metadata(message, file_path, TEMP_DIR)
+                logger.info(f"媒体组文件 {file_path} 收集到元数据: {bool(metadata)}")
+                if metadata:
+                    context.media_metadata[file_path] = metadata
             
             # 修改：保存下载的文件路径到context.media_files
             if files:
@@ -157,21 +171,81 @@ class SenderFilter(BaseFilter):
                     context.original_link = f"\n原始消息: https://t.me/c/{str(event.chat_id)[4:]}/{event.message.id}"
                 # 添加时间信息和原始链接
                 caption_text += context.time_info + context.original_link
-                
-                # 作为一个组发送所有文件
-                sent_messages = await client.send_file(
-                    target_chat_id,
-                    files,
-                    caption=caption_text,
-                    parse_mode=parse_mode,
-                    buttons=context.buttons,
-                    link_preview={
-                        PreviewMode.ON: True,
-                        PreviewMode.OFF: False,
-                        PreviewMode.FOLLOW: context.event.message.media is not None
-                    }[rule.is_preview]
+
+                entity = await client.get_input_entity(target_chat_id)
+
+                first_caption = caption_text or ''
+                if parse_mode:
+                    parsed_caption, msg_entities = await client._parse_message_text(first_caption, parse_mode)
+                else:
+                    parsed_caption, msg_entities = first_caption, None
+
+                media_inputs = []
+                captions = [(parsed_caption, msg_entities)] + [('', None)] * (len(files) - 1)
+
+                for idx, file_path in enumerate(files):
+                    message = file_to_message.get(file_path)
+                    if not message or not message.media:
+                        continue
+
+                    metadata = context.media_metadata.get(file_path, {}) if hasattr(context, 'media_metadata') else {}
+                    logger.info(f"发送媒体组文件 {file_path} 是否有元数据: {bool(metadata)}")
+
+                    document = getattr(message.media, 'document', None)
+                    attributes = metadata.get('attributes')
+                    if not attributes and document:
+                        attributes = document.attributes
+
+                    thumb_path = metadata.get('thumb')
+                    supports_streaming = metadata.get('supports_streaming', False)
+
+                    try:
+                        _, input_media, _ = await client._file_to_media(
+                            file_path,
+                            attributes=attributes,
+                            thumb=thumb_path,
+                            supports_streaming=supports_streaming
+                        )
+                    except Exception as media_error:
+                        logger.error(f'转换媒体 {file_path} 失败: {media_error}')
+                        continue
+
+                    if isinstance(input_media, (types.InputMediaUploadedPhoto, types.InputMediaPhotoExternal)):
+                        r = await client(functions.messages.UploadMediaRequest(entity, media=input_media))
+                        input_media = utils.get_input_media(r.photo)
+                    elif isinstance(input_media, types.InputMediaUploadedDocument):
+                        r = await client(functions.messages.UploadMediaRequest(entity, media=input_media))
+                        input_media = utils.get_input_media(
+                            r.document,
+                            supports_streaming=supports_streaming
+                        )
+
+                    caption_msg, caption_entities = captions[idx] if idx < len(captions) else ('', None)
+                    media_inputs.append(
+                        types.InputSingleMedia(
+                            input_media,
+                            message=caption_msg,
+                            entities=caption_entities
+                        )
+                    )
+
+                if not media_inputs:
+                    logger.warning('媒体组中没有可发送的媒体，跳过发送')
+                    return
+
+                request = functions.messages.SendMultiMediaRequest(
+                    entity,
+                    reply_to=None,
+                    multi_media=media_inputs,
+                    silent=None,
+                    schedule_date=None,
+                    clear_draft=None,
+                    background=None
                 )
-                # 保存发送的消息到上下文
+                response = await client(request)
+                random_ids = [m.random_id for m in media_inputs]
+                sent_messages = client._get_response_message(random_ids, response, entity)
+
                 if isinstance(sent_messages, list):
                     context.forwarded_messages = sent_messages
                 else:
@@ -186,8 +260,15 @@ class SenderFilter(BaseFilter):
             if not rule.enable_push:
                 for file_path in files:
                     try:
-                        os.remove(file_path)
-                        logger.info(f'删除临时文件: {file_path}')
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logger.info(f'删除临时文件: {file_path}')
+                        metadata = context.media_metadata.get(file_path, {})
+                        thumb_path = metadata.get('thumb')
+                        if thumb_path and os.path.exists(thumb_path):
+                            os.remove(thumb_path)
+                            logger.info(f'删除缩略图文件: {thumb_path}')
+                        context.media_metadata.pop(file_path, None)
                     except Exception as e:
                         logger.error(f'删除临时文件失败: {str(e)}')
             else:
@@ -237,18 +318,35 @@ class SenderFilter(BaseFilter):
                     context.time_info + 
                     context.original_link
                 )
-                
-                await client.send_file(
-                    target_chat_id,
-                    file_path,
-                    caption=caption,
-                    parse_mode=parse_mode,
-                    buttons=context.buttons,
-                    link_preview={
+
+                metadata = context.media_metadata.get(file_path, {})
+                send_kwargs = {
+                    "caption": caption,
+                    "parse_mode": parse_mode,
+                    "buttons": context.buttons,
+                    "link_preview": {
                         PreviewMode.ON: True,
                         PreviewMode.OFF: False,
                         PreviewMode.FOLLOW: context.event.message.media is not None
                     }[rule.is_preview]
+                }
+
+                thumb_path = metadata.get('thumb')
+                if thumb_path and os.path.exists(thumb_path):
+                    send_kwargs['thumb'] = thumb_path
+
+                attributes = metadata.get('attributes')
+                if attributes:
+                    send_kwargs['attributes'] = attributes
+
+                supports_streaming = metadata.get('supports_streaming')
+                if supports_streaming is not None:
+                    send_kwargs['supports_streaming'] = supports_streaming
+
+                await client.send_file(
+                    target_chat_id,
+                    file_path,
+                    **send_kwargs
                 )
                 logger.info(f'媒体消息已发送')
             except Exception as e:
@@ -258,8 +356,15 @@ class SenderFilter(BaseFilter):
                 # 删除临时文件，但如果启用了推送则保留
                 if not rule.enable_push:
                     try:
-                        os.remove(file_path)
-                        logger.info(f'删除临时文件: {file_path}')
+                        if os.path.exists(file_path):
+                            os.remove(file_path)
+                            logger.info(f'删除临时文件: {file_path}')
+                        if metadata:
+                            thumb_path = metadata.get('thumb')
+                            if thumb_path and os.path.exists(thumb_path):
+                                os.remove(thumb_path)
+                                logger.info(f'删除缩略图文件: {thumb_path}')
+                        context.media_metadata.pop(file_path, None)
                     except Exception as e:
                         logger.error(f'删除临时文件失败: {str(e)}')
                 else:

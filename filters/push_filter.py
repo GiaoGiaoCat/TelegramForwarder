@@ -9,6 +9,8 @@ import traceback
 from filters.base_filter import BaseFilter
 from models.models import get_session, PushConfig
 from enums.enums import PreviewMode
+from utils.constants import TEMP_DIR
+from utils.media import collect_media_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -87,9 +89,17 @@ class PushFilter(BaseFilter):
                 logger.info(f'清理已处理的媒体文件，共 {len(processed_files)} 个')
                 for file_path in processed_files:
                     try:
-                        if os.path.exists(str(file_path)):
-                            os.remove(file_path)
-                            logger.info(f'删除已处理的媒体文件: {file_path}')
+                        path_str = str(file_path)
+                        if os.path.exists(path_str):
+                            os.remove(path_str)
+                            logger.info(f'删除已处理的媒体文件: {path_str}')
+                        metadata = context.media_metadata.get(path_str) or context.media_metadata.get(file_path)
+                        if metadata:
+                            thumb_path = metadata.get('thumb')
+                            if thumb_path and os.path.exists(thumb_path):
+                                os.remove(thumb_path)
+                                logger.info(f'删除缩略图文件: {thumb_path}')
+                            context.media_metadata.pop(path_str, None)
                     except Exception as e:
                         logger.error(f'删除媒体文件失败: {str(e)}')
     
@@ -136,10 +146,13 @@ class PushFilter(BaseFilter):
                 need_cleanup = True
                 for message in context.media_group_messages:
                     if message.media:
-                        file_path = await message.download_media(os.path.join(os.getcwd(), 'temp'))
+                        file_path = await message.download_media(TEMP_DIR)
                         if file_path:
                             files.append(file_path)
                             logger.info(f'已下载媒体组文件: {file_path}')
+                            metadata = await collect_media_metadata(message, file_path, TEMP_DIR)
+                            if metadata:
+                                context.media_metadata[file_path] = metadata
             # 如果SenderFilter已经下载了文件，使用它们
             elif context.media_files:
                 logger.info(f'使用SenderFilter已下载的文件: {len(context.media_files)}个')
@@ -150,10 +163,13 @@ class PushFilter(BaseFilter):
                 need_cleanup = True
                 for message in context.media_group_messages:
                     if message.media:
-                        file_path = await message.download_media(os.path.join(os.getcwd(), 'temp'))
+                        file_path = await message.download_media(TEMP_DIR)
                         if file_path:
                             files.append(file_path)
                             logger.info(f'已下载媒体文件: {file_path}')
+                            metadata = await collect_media_metadata(message, file_path, TEMP_DIR)
+                            if metadata:
+                                context.media_metadata[file_path] = metadata
             
             # 如果有可用的媒体文件，构建推送内容
             if files:
@@ -293,10 +309,13 @@ class PushFilter(BaseFilter):
             elif rule.enable_only_push and event.message and event.message.media:
                 logger.info(f'需要自己下载文件，开始下载单个媒体消息...')
                 need_cleanup = True
-                file_path = await event.message.download_media(os.path.join(os.getcwd(), 'temp'))
+                file_path = await event.message.download_media(TEMP_DIR)
                 if file_path:
                     files.append(file_path)
                     logger.info(f'已下载媒体文件: {file_path}')
+                    metadata = await collect_media_metadata(event.message, file_path, TEMP_DIR)
+                    if metadata:
+                        context.media_metadata[file_path] = metadata
             
             # 发送媒体文件
             for file_path in files:
@@ -348,12 +367,19 @@ class PushFilter(BaseFilter):
             if need_cleanup:
                 for file_path in files:
                     try:
-                        if os.path.exists(str(file_path)):
-                            os.remove(file_path)
-                            logger.info(f'删除临时文件: {file_path}')
-                            # 从已处理列表中移除
+                        path_str = str(file_path)
+                        if os.path.exists(path_str):
+                            os.remove(path_str)
+                            logger.info(f'删除临时文件: {path_str}')
                             if file_path in processed_files:
                                 processed_files.remove(file_path)
+                        metadata = context.media_metadata.get(path_str) or context.media_metadata.get(file_path)
+                        if metadata:
+                            thumb_path = metadata.get('thumb')
+                            if thumb_path and os.path.exists(thumb_path):
+                                os.remove(thumb_path)
+                                logger.info(f'删除缩略图文件: {thumb_path}')
+                            context.media_metadata.pop(path_str, None)
                     except Exception as e:
                         logger.error(f'删除临时文件失败: {str(e)}')
     

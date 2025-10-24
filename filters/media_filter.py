@@ -1,7 +1,7 @@
 import logging
 import os
 import asyncio
-from utils.media import get_media_size
+from utils.media import get_media_size, collect_media_metadata
 from utils.constants import TEMP_DIR
 from filters.base_filter import BaseFilter
 from utils.media import get_max_media_size
@@ -245,6 +245,9 @@ class MediaFilter(BaseFilter):
                     if file_path:
                         context.media_files.append(file_path)
                         logger.info(f'媒体文件已下载到: {file_path}')
+                        metadata = await collect_media_metadata(event.message, file_path, TEMP_DIR)
+                        if metadata:
+                            context.media_metadata[file_path] = metadata
                 except Exception as e:
                     logger.error(f'下载媒体文件时出错: {str(e)}')
                     context.errors.append(f"下载媒体文件错误: {str(e)}")
@@ -360,4 +363,3 @@ class MediaFilter(BaseFilter):
             session.close()
             
         return allowed
-
