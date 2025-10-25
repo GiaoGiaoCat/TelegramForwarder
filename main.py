@@ -12,6 +12,7 @@ import multiprocessing
 from models.db_operations import DBOperations
 from scheduler.summary_scheduler import SummaryScheduler
 from scheduler.chat_updater import ChatUpdater
+from scheduler.cleanup_scheduler import CleanupScheduler
 from handlers.bot_handler import send_welcome_message
 from rss.main import app as rss_app
 from utils.log_config import setup_logging
@@ -39,6 +40,7 @@ db_ops = None
 
 scheduler = None
 chat_updater = None
+cleanup_scheduler = None
 
 
 async def init_db_ops():
@@ -79,7 +81,7 @@ def run_rss_server(host: str, port: int):
 
 async def start_clients():
     # 初始化 DBOperations
-    global db_ops, scheduler, chat_updater
+    global db_ops, scheduler, chat_updater, cleanup_scheduler
     db_ops = await DBOperations.create()
 
     try:
@@ -102,10 +104,18 @@ async def start_clients():
         # 创建并启动调度器
         scheduler = SummaryScheduler(user_client, bot_client)
         await scheduler.start()
-        
+
         # 创建并启动聊天信息更新器
         chat_updater = ChatUpdater(user_client)
         await chat_updater.start()
+
+        # 创建并启动临时文件清理调度器
+        # 从环境变量读取配置，默认每小时清理一次，清理超过1小时的文件
+        cleanup_interval = int(os.getenv('CLEANUP_INTERVAL_SECONDS', 3600))  # 默认1小时
+        file_age = int(os.getenv('CLEANUP_FILE_AGE_SECONDS', 3600))  # 默认1小时
+        cleanup_scheduler = CleanupScheduler(cleanup_interval, file_age)
+        await cleanup_scheduler.start()
+        logger.info(f'临时文件清理调度器已启动 (间隔: {cleanup_interval}秒, 文件保留: {file_age}秒)')
 
         # 如果启用了 RSS 服务
         if os.getenv('RSS_ENABLED', '').lower() == 'true':
@@ -145,6 +155,10 @@ async def start_clients():
         # 停止聊天信息更新器
         if chat_updater:
             chat_updater.stop()
+        # 停止临时文件清理调度器
+        if cleanup_scheduler:
+            cleanup_scheduler.stop()
+            logger.info('临时文件清理调度器已停止')
         # 如果 RSS 服务在运行，停止它
         if 'rss_process' in locals() and rss_process.is_alive():
             rss_process.terminate()
