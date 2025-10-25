@@ -792,7 +792,8 @@ async def handle_help_command(event, command):
         "**转发规则管理**\n"
         "/copy_rule(/cr)  <源规则ID> [目标规则ID] - 复制指定规则的所有设置到当前规则或目标规则ID\n"
         "/list_rule(/lr) - 列出所有转发规则\n"
-        "/delete_rule(/dr) <规则ID> [规则ID] [规则ID] ... - 删除指定规则\n\n"
+        "/delete_rule(/dr) <规则ID> [规则ID] [规则ID] ... - 删除指定规则\n"
+        "/forward_history(/fh) <数量> [规则ID] - 转发历史消息（数量范围：1-1000）\n\n"
 
         "**关键字管理**\n"
         "/add(/a) <关键字> [关键字] [\"关 键 字\"] [\'关 键 字\'] ... - 添加普通关键字\n"
@@ -2249,5 +2250,188 @@ async def handle_delete_rss_user_command(event, command, parts):
         logger.error(traceback.format_exc())
         await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
         await reply_and_delete(event,error_message)
+    finally:
+        session.close()
+
+async def handle_forward_history_command(event, command, parts):
+    """处理 forward_history 命令 - 转发历史消息"""
+    # 参数格式: /forward_history <数量> [规则ID]
+    if len(parts) < 2:
+        await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+        await reply_and_delete(event,
+            f'用法: /{command} <数量> [规则ID]\n'
+            f'例如:\n'
+            f'/{command} 100          # 使用当前规则转发最近 100 条消息\n'
+            f'/{command} 50 123      # 使用规则 ID 123 转发最近 50 条消息\n'
+            f'提示: 数量范围为 1-1000'
+        )
+        return
+
+    session = get_session()
+    progress_message = None
+
+    try:
+        # 解析数量参数
+        try:
+            limit = int(parts[1])
+            if limit < 1 or limit > 1000:
+                await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                await reply_and_delete(event, '消息数量必须在 1-1000 之间')
+                return
+        except ValueError:
+            await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+            await reply_and_delete(event, '消息数量必须是数字')
+            return
+
+        # 获取规则
+        rule = None
+        source_chat = None
+
+        if len(parts) >= 3:
+            # 使用指定的规则ID
+            try:
+                rule_id = int(parts[2])
+                rule = session.query(ForwardRule).filter(ForwardRule.id == rule_id).first()
+                if not rule:
+                    await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                    await reply_and_delete(event, f'未找到规则 ID: {rule_id}')
+                    return
+                source_chat = rule.source_chat
+            except ValueError:
+                await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                await reply_and_delete(event, '规则 ID 必须是数字')
+                return
+        else:
+            # 使用当前规则
+            rule_info = await get_current_rule(session, event)
+            if not rule_info:
+                return
+            rule, source_chat = rule_info
+
+        # 检查规则是否启用
+        if not rule.enable_rule:
+            await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+            await reply_and_delete(event, f'规则 ID {rule.id} 未启用，无法转发历史消息')
+            return
+
+        logger.info(f'开始转发历史消息: 规则 ID={rule.id}, 源={source_chat.name}, 数量={limit}')
+
+        # 获取 user_client
+        user_client = await get_user_client()
+
+        # 发送进度消息
+        await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+        progress_message = await event.reply(
+            f'🔄 开始获取历史消息...\n'
+            f'规则: {source_chat.name} → {rule.target_chat.name}\n'
+            f'数量: {limit} 条'
+        )
+
+        # 获取源聊天的 telegram_chat_id（需要处理可能的 -100 前缀）
+        source_chat_id = source_chat.telegram_chat_id
+        # 如果是频道/超级群组，需要转换为整数（Telethon 需要整数ID）
+        if source_chat_id.startswith('100'):
+            source_chat_id = int(f'-{source_chat_id}')
+        else:
+            source_chat_id = int(source_chat_id)
+
+        # 获取历史消息
+        messages = []
+        async for message in user_client.iter_messages(source_chat_id, limit=limit):
+            messages.append(message)
+
+        if not messages:
+            if progress_message:
+                await progress_message.edit(
+                    f'❌ 未找到任何历史消息\n'
+                    f'规则: {source_chat.name} → {rule.target_chat.name}'
+                )
+            return
+
+        logger.info(f'获取到 {len(messages)} 条历史消息，开始处理')
+
+        # 反转消息列表，从最早的消息开始转发
+        messages.reverse()
+
+        # 处理每条消息
+        success_count = 0
+        failed_count = 0
+        skipped_count = 0
+
+        # 导入 process_forward_rule
+        from filters.process import process_forward_rule
+
+        for i, message in enumerate(messages, 1):
+            try:
+                # 创建一个模拟的 event 对象
+                # Telethon 的 process_forward_rule 需要 event 对象
+                class MessageEvent:
+                    def __init__(self, msg):
+                        self.message = msg
+                        self.chat_id = msg.chat_id
+
+                    async def get_chat(self):
+                        return await self.message.get_chat()
+
+                # 使用消息创建事件对象
+                msg_event = MessageEvent(message)
+
+                # 获取要使用的客户端
+                client = await get_bot_client() if rule.use_bot else user_client
+
+                # 调用转发处理流程
+                result = await process_forward_rule(
+                    client,
+                    msg_event,
+                    str(abs(message.chat_id)),
+                    rule
+                )
+
+                if result:
+                    success_count += 1
+                else:
+                    skipped_count += 1
+
+            except Exception as e:
+                logger.error(f'处理消息 {i}/{len(messages)} 时出错: {str(e)}')
+                logger.exception(e)
+                failed_count += 1
+
+            # 每处理 10 条消息更新一次进度
+            if i % 10 == 0 and progress_message:
+                try:
+                    await progress_message.edit(
+                        f'🔄 正在处理历史消息...\n'
+                        f'规则: {source_chat.name} → {rule.target_chat.name}\n'
+                        f'进度: {i}/{len(messages)}\n'
+                        f'✅ 成功: {success_count} | ⏭️ 跳过: {skipped_count} | ❌ 失败: {failed_count}'
+                    )
+                except Exception as e:
+                    logger.error(f'更新进度消息失败: {str(e)}')
+
+        # 发送完成消息
+        if progress_message:
+            await progress_message.edit(
+                f'✅ 历史消息转发完成！\n'
+                f'规则: {source_chat.name} → {rule.target_chat.name}\n'
+                f'总计: {len(messages)} 条\n'
+                f'✅ 成功: {success_count}\n'
+                f'⏭️ 跳过: {skipped_count}\n'
+                f'❌ 失败: {failed_count}'
+            )
+
+        logger.info(f'历史消息转发完成: 成功={success_count}, 跳过={skipped_count}, 失败={failed_count}')
+
+    except Exception as e:
+        logger.error(f'转发历史消息时出错: {str(e)}')
+        logger.exception(e)
+        if progress_message:
+            try:
+                await progress_message.edit(f'❌ 转发历史消息时出错: {str(e)}')
+            except:
+                pass
+        else:
+            await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+            await reply_and_delete(event, f'转发历史消息时出错: {str(e)}')
     finally:
         session.close()
