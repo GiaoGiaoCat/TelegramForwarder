@@ -793,7 +793,8 @@ async def handle_help_command(event, command):
         "/copy_rule(/cr)  <源规则ID> [目标规则ID] - 复制指定规则的所有设置到当前规则或目标规则ID\n"
         "/list_rule(/lr) - 列出所有转发规则\n"
         "/delete_rule(/dr) <规则ID> [规则ID] [规则ID] ... - 删除指定规则\n"
-        "/forward_history(/fh) <数量> [规则ID] - 转发历史消息（数量范围：1-1000）\n\n"
+        "/forward_history(/fh) <数量|起始日期> [截止日期] [规则ID] - 转发历史消息\n"
+        "  示例: /fh 100 | /fh 2024-01-01 2024-01-31\n\n"
 
         "**关键字管理**\n"
         "/add(/a) <关键字> [关键字] [\"关 键 字\"] [\'关 键 字\'] ... - 添加普通关键字\n"
@@ -2255,15 +2256,19 @@ async def handle_delete_rss_user_command(event, command, parts):
 
 async def handle_forward_history_command(event, command, parts):
     """处理 forward_history 命令 - 转发历史消息"""
-    # 参数格式: /forward_history <数量> [规则ID]
+    # 参数格式:
+    # /forward_history <数量> [规则ID]
+    # /forward_history <起始日期> <截止日期> [规则ID]
     if len(parts) < 2:
         await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
         await reply_and_delete(event,
-            f'用法: /{command} <数量> [规则ID]\n'
+            f'用法: /{command} <数量|起始日期> [截止日期] [规则ID]\n'
             f'例如:\n'
-            f'/{command} 100          # 使用当前规则转发最近 100 条消息\n'
-            f'/{command} 50 123      # 使用规则 ID 123 转发最近 50 条消息\n'
-            f'提示: 数量范围为 1-1000'
+            f'/{command} 100                        # 转发最近 100 条消息\n'
+            f'/{command} 50 123                    # 使用规则 123 转发最近 50 条消息\n'
+            f'/{command} 2024-01-01 2024-01-31     # 转发指定日期范围的消息\n'
+            f'/{command} 2024-01-01 2024-01-31 123 # 使用规则 123 转发指定日期范围\n'
+            f'提示: 数量范围为 1-10000，日期格式为 YYYY-MM-DD'
         )
         return
 
@@ -2271,33 +2276,73 @@ async def handle_forward_history_command(event, command, parts):
     progress_message = None
 
     try:
-        # 解析数量参数
+        # 判断是使用数量还是日期范围
+        use_date_range = False
+        limit = None
+        start_date = None
+        end_date = None
+
+        # 尝试解析第一个参数
+        from datetime import datetime, timedelta
+
         try:
+            # 尝试作为数字解析
             limit = int(parts[1])
-            if limit < 1 or limit > 1000:
+            if limit < 1 or limit > 10000:
                 await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
-                await reply_and_delete(event, '消息数量必须在 1-1000 之间')
+                await reply_and_delete(event, '消息数量必须在 1-10000 之间')
                 return
         except ValueError:
-            await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
-            await reply_and_delete(event, '消息数量必须是数字')
-            return
+            # 不是数字，尝试作为日期解析
+            try:
+                start_date = datetime.strptime(parts[1], '%Y-%m-%d')
+                use_date_range = True
+
+                # 检查是否有第二个日期参数
+                if len(parts) < 3:
+                    await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                    await reply_and_delete(event, '使用日期范围时必须提供起始日期和截止日期')
+                    return
+
+                # 解析截止日期
+                try:
+                    end_date = datetime.strptime(parts[2], '%Y-%m-%d')
+                    # 将截止日期设置为当天的23:59:59
+                    end_date = end_date.replace(hour=23, minute=59, second=59)
+                except ValueError:
+                    await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                    await reply_and_delete(event, '截止日期格式错误，请使用 YYYY-MM-DD 格式')
+                    return
+
+                # 验证日期范围
+                if start_date > end_date:
+                    await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                    await reply_and_delete(event, '起始日期不能晚于截止日期')
+                    return
+
+            except ValueError:
+                await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
+                await reply_and_delete(event, '参数格式错误，请使用数量或日期格式（YYYY-MM-DD）')
+                return
 
         # 获取规则
         rule = None
         source_chat = None
 
-        if len(parts) >= 3:
+        # 确定规则ID参数的位置
+        rule_id_index = 3 if use_date_range else 2
+
+        if len(parts) > rule_id_index:
             # 使用指定的规则ID
             try:
-                rule_id = int(parts[2])
+                rule_id = int(parts[rule_id_index])
                 rule = session.query(ForwardRule).filter(ForwardRule.id == rule_id).first()
                 if not rule:
                     await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
                     await reply_and_delete(event, f'未找到规则 ID: {rule_id}')
                     return
                 source_chat = rule.source_chat
-            except ValueError:
+            except (ValueError, IndexError):
                 await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
                 await reply_and_delete(event, '规则 ID 必须是数字')
                 return
@@ -2314,18 +2359,29 @@ async def handle_forward_history_command(event, command, parts):
             await reply_and_delete(event, f'规则 ID {rule.id} 未启用，无法转发历史消息')
             return
 
-        logger.info(f'开始转发历史消息: 规则 ID={rule.id}, 源={source_chat.name}, 数量={limit}')
+        # 记录日志
+        if use_date_range:
+            logger.info(f'开始转发历史消息: 规则 ID={rule.id}, 源={source_chat.name}, 日期范围={start_date.strftime("%Y-%m-%d")} 至 {end_date.strftime("%Y-%m-%d")}')
+        else:
+            logger.info(f'开始转发历史消息: 规则 ID={rule.id}, 源={source_chat.name}, 数量={limit}')
 
         # 获取 user_client
         user_client = await get_user_client()
 
         # 发送进度消息
         await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
-        progress_message = await event.reply(
-            f'🔄 开始获取历史消息...\n'
-            f'规则: {source_chat.name} → {rule.target_chat.name}\n'
-            f'数量: {limit} 条'
-        )
+        if use_date_range:
+            progress_message = await event.reply(
+                f'🔄 开始获取历史消息...\n'
+                f'规则: {source_chat.name} → {rule.target_chat.name}\n'
+                f'日期范围: {start_date.strftime("%Y-%m-%d")} 至 {end_date.strftime("%Y-%m-%d")}'
+            )
+        else:
+            progress_message = await event.reply(
+                f'🔄 开始获取历史消息...\n'
+                f'规则: {source_chat.name} → {rule.target_chat.name}\n'
+                f'数量: {limit} 条'
+            )
 
         # 获取源聊天的 telegram_chat_id（需要处理可能的 -100 前缀）
         source_chat_id = source_chat.telegram_chat_id
@@ -2337,8 +2393,23 @@ async def handle_forward_history_command(event, command, parts):
 
         # 获取历史消息
         messages = []
-        async for message in user_client.iter_messages(source_chat_id, limit=limit):
-            messages.append(message)
+        if use_date_range:
+            # 使用日期范围获取消息
+            # Telethon 的 iter_messages 使用 offset_date 参数从指定日期开始获取
+            async for message in user_client.iter_messages(
+                source_chat_id,
+                offset_date=end_date,
+                reverse=True
+            ):
+                # 检查消息日期是否在范围内
+                if message.date < start_date:
+                    break  # 已经超出起始日期，停止获取
+                if message.date <= end_date:
+                    messages.append(message)
+        else:
+            # 使用数量限制获取消息
+            async for message in user_client.iter_messages(source_chat_id, limit=limit):
+                messages.append(message)
 
         if not messages:
             if progress_message:
