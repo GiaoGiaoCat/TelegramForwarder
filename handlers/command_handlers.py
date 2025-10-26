@@ -2284,7 +2284,7 @@ async def handle_forward_history_command(event, command, parts):
         end_date = None
 
         # 尝试解析第一个参数
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
 
         try:
             # 尝试作为数字解析
@@ -2297,6 +2297,8 @@ async def handle_forward_history_command(event, command, parts):
             # 不是数字，尝试作为日期解析
             try:
                 start_date = datetime.strptime(parts[1], '%Y-%m-%d')
+                # 添加 UTC 时区信息
+                start_date = start_date.replace(tzinfo=timezone.utc)
                 use_date_range = True
 
                 # 检查是否有第二个日期参数
@@ -2308,8 +2310,8 @@ async def handle_forward_history_command(event, command, parts):
                 # 解析截止日期
                 try:
                     end_date = datetime.strptime(parts[2], '%Y-%m-%d')
-                    # 将截止日期设置为当天的23:59:59
-                    end_date = end_date.replace(hour=23, minute=59, second=59)
+                    # 将截止日期设置为当天的23:59:59，并添加 UTC 时区信息
+                    end_date = end_date.replace(hour=23, minute=59, second=59, tzinfo=timezone.utc)
                 except ValueError:
                     await async_delete_user_message(event.client, event.message.chat_id, event.message.id, 0)
                     await reply_and_delete(event, '截止日期格式错误，请使用 YYYY-MM-DD 格式')
