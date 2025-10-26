@@ -2398,17 +2398,27 @@ async def handle_forward_history_command(event, command, parts):
         messages = []
         if use_date_range:
             # 使用日期范围获取消息
-            # Telethon 的 iter_messages 使用 offset_date 参数从指定日期开始获取
+            # Telethon 的 iter_messages:
+            # - offset_date: 从这个日期之前的消息开始获取 (不包括这个日期之后的消息)
+            # - reverse=False (默认): 从新到旧获取
+            # 策略: 从 end_date+1 天开始获取,一直获取到 start_date 之前
+            logger.info(f'开始获取日期范围内的消息: {start_date} 到 {end_date}')
+
+            # 从最新的消息开始往前找,直到找到 start_date 之前的消息
             async for message in user_client.iter_messages(
                 source_chat_id,
-                offset_date=end_date,
-                reverse=True
+                offset_date=end_date + timedelta(days=1)  # 从截止日期的下一天开始
             ):
                 # 检查消息日期是否在范围内
                 if message.date < start_date:
+                    logger.info(f'已到达起始日期之前,停止获取。最后一条消息时间: {message.date}')
                     break  # 已经超出起始日期，停止获取
-                if message.date <= end_date:
+
+                # 如果消息在范围内,添加到列表
+                if start_date <= message.date <= end_date:
                     messages.append(message)
+
+            logger.info(f'获取到 {len(messages)} 条消息')
         else:
             # 使用数量限制获取消息
             async for message in user_client.iter_messages(source_chat_id, limit=limit):
