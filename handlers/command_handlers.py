@@ -1987,7 +1987,8 @@ async def handle_replace_all_command(event, parts):
             success_count, duplicate_count = await db_ops.add_replace_rules(
                 session,
                 rule.id,
-                [(pattern, content)]  # 传入一个元组列表，每个元组包含 pattern 和 content
+                [pattern],  # patterns 列表
+                [content]   # contents 列表
             )
 
             # 累计成功和重复的数量
