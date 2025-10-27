@@ -51,8 +51,8 @@ class MediaFilter(BaseFilter):
         rule = context.rule
         client = context.client
         
-        logger.info(f'处理媒体组消息 组ID: {event.message.grouped_id}')
-        
+        logger.info(f'[MediaFilter] 处理媒体组消息，组ID: {event.message.grouped_id}, 消息ID: {event.message.id}')
+
         # 等待更长时间让所有媒体消息到达
         await asyncio.sleep(1)
         
@@ -72,6 +72,8 @@ class MediaFilter(BaseFilter):
             # 使用消息所在的 chat 进行查询，而不是 event.chat_id
             # 这样可以避免 entity 解析问题
             chat = await event.message.get_chat()
+            logger.info(f'[MediaFilter] 开始查询媒体组消息，chat: {chat.id if hasattr(chat, "id") else chat}')
+
             async for message in event.client.iter_messages(
                 chat,
                 limit=20,
@@ -79,6 +81,7 @@ class MediaFilter(BaseFilter):
                 max_id=event.message.id + 10
             ):
                 if message.grouped_id == event.message.grouped_id:
+                    logger.info(f'[MediaFilter] 找到同组消息: ID={message.id}, 有媒体={message.media is not None}')
                     if message.media:
                         total_media_count += 1
                         # 检查媒体类型
@@ -118,10 +121,11 @@ class MediaFilter(BaseFilter):
                     context.media_group_messages.append(message)
                     logger.info(f'找到媒体组消息: ID={message.id}, 类型={type(message.media).__name__ if message.media else "无媒体"}')
         except Exception as e:
-            logger.error(f'收集媒体组消息时出错: {str(e)}')
+            logger.error(f'[MediaFilter] 收集媒体组消息时出错: {str(e)}')
+            logger.exception(e)
             context.errors.append(f"收集媒体组消息错误: {str(e)}")
-        
-        logger.info(f'共找到 {len(context.media_group_messages)} 条媒体组消息，{len(context.skipped_media)} 条超限')
+
+        logger.info(f'[MediaFilter] 媒体组查询完成，总媒体数={total_media_count}, 被屏蔽={blocked_media_count}, 收集到={len(context.media_group_messages)} 条, 超限={len(context.skipped_media)} 条')
         
         # 如果所有媒体都被屏蔽，设置不转发
         if total_media_count > 0 and total_media_count == blocked_media_count:

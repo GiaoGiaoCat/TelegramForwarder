@@ -2442,11 +2442,29 @@ async def handle_forward_history_command(event, command, parts):
         failed_count = 0
         skipped_count = 0
 
+        # 用于跟踪已处理的媒体组，避免重复处理
+        processed_media_groups = set()
+
         # 导入 process_forward_rule
         from filters.process import process_forward_rule
 
         for i, message in enumerate(messages, 1):
             try:
+                # 记录消息信息用于调试
+                media_info = f"媒体组ID: {message.grouped_id}" if message.grouped_id else "单条消息"
+                logger.info(f'[历史消息 {i}/{len(messages)}] ID={message.id}, {media_info}, 文本={message.text[:50] if message.text else "无文本"}')
+
+                # 如果是媒体组消息，检查是否已经处理过
+                if message.grouped_id:
+                    if message.grouped_id in processed_media_groups:
+                        logger.info(f'媒体组 {message.grouped_id} 已处理，跳过消息 ID={message.id}')
+                        skipped_count += 1
+                        continue
+                    # 标记为已处理
+                    processed_media_groups.add(message.grouped_id)
+                    logger.info(f'开始处理媒体组 {message.grouped_id}，首条消息 ID={message.id}')
+
+
                 # 创建一个模拟的 event 对象
                 # Telethon 的 process_forward_rule 需要 event 对象
                 class MessageEvent:
