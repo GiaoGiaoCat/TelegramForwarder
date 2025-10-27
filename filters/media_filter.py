@@ -76,7 +76,7 @@ class MediaFilter(BaseFilter):
 
             # 获取 user_client 用于查询历史消息
             # Bot 账号无法调用 iter_messages (BotMethodInvalidError)
-            from utils.get_clients import get_main_module
+            from utils.common import get_main_module
             main = await get_main_module()
             query_client = main.user_client if (main and hasattr(main, 'user_client')) else event.client
 
