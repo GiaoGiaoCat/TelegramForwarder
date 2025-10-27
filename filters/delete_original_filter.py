@@ -34,8 +34,10 @@ class DeleteOriginalFilter(BaseFilter):
             # 媒体组消息
             if event.message.grouped_id:
                 # 使用用户客户端获取并删除媒体组消息
+                # 使用消息所在的 chat 进行查询，避免 entity 解析问题
+                chat = await event.message.get_chat()
                 async for message in user_client.iter_messages(
-                        event.chat_id,
+                        chat,
                         min_id=event.message.id - 10,
                         max_id=event.message.id + 10,
                         reverse=True
@@ -45,7 +47,8 @@ class DeleteOriginalFilter(BaseFilter):
                         logger.info(f'已删除媒体组消息 ID: {message.id}')
             else:
                 # 单条消息的删除逻辑
-                message = await user_client.get_messages(event.chat_id, ids=event.message.id)
+                chat = await event.message.get_chat()
+                message = await user_client.get_messages(chat, ids=event.message.id)
                 await message.delete()
                 logger.info(f'已删除原始消息 ID: {event.message.id}')
                 

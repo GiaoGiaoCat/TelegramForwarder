@@ -69,8 +69,11 @@ class MediaFilter(BaseFilter):
         total_media_count = 0  # 总媒体数量
         blocked_media_count = 0  # 被屏蔽的媒体数量
         try:
+            # 使用消息所在的 chat 进行查询，而不是 event.chat_id
+            # 这样可以避免 entity 解析问题
+            chat = await event.message.get_chat()
             async for message in event.client.iter_messages(
-                event.chat_id,
+                chat,
                 limit=20,
                 min_id=event.message.id - 10,
                 max_id=event.message.id + 10

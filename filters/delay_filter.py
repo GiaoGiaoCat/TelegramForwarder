@@ -52,10 +52,12 @@ class DelayFilter(BaseFilter):
             try:
                 main = await get_main_module()
                 client = main.user_client if (main and hasattr(main, 'user_client')) else context.client
-                
+
                 # 获取更新后的消息
                 logger.info(f"[规则ID:{rule.id}] 正在获取聊天 {chat_id} 的消息 {original_id}...")
-                updated_message = await client.get_messages(chat_id, ids=original_id)
+                # 使用消息所在的 chat 进行查询，避免 entity 解析问题
+                chat = await event.message.get_chat()
+                updated_message = await client.get_messages(chat, ids=original_id)
 
                 
                 if updated_message:

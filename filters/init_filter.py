@@ -33,11 +33,14 @@ class InitFilter(BaseFilter):
             if event.message.grouped_id:
                 # 等待更长时间让所有媒体消息到达
                 # await asyncio.sleep(1)
-                
+
                 # 收集媒体组的所有消息
                 try:
+                    # 使用消息所在的 chat 进行查询，而不是 event.chat_id
+                    # 这样可以避免 entity 解析问题
+                    chat = await event.message.get_chat()
                     async for message in event.client.iter_messages(
-                        event.chat_id,
+                        chat,
                         limit=20,
                         min_id=event.message.id - 10,
                         max_id=event.message.id + 10
