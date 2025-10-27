@@ -42,8 +42,14 @@ class InitFilter(BaseFilter):
                     chat = await event.message.get_chat()
                     logger.info(f'[InitFilter] 开始查询媒体组消息，chat: {chat.id if hasattr(chat, "id") else chat}')
 
+                    # 获取 user_client 用于查询历史消息
+                    # Bot 账号无法调用 iter_messages (BotMethodInvalidError)
+                    from utils.get_clients import get_main_module
+                    main = await get_main_module()
+                    query_client = main.user_client if (main and hasattr(main, 'user_client')) else event.client
+
                     found_messages = 0
-                    async for message in event.client.iter_messages(
+                    async for message in query_client.iter_messages(
                         chat,
                         limit=20,
                         min_id=event.message.id - 10,
