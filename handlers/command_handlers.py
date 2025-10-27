@@ -2450,18 +2450,19 @@ async def handle_forward_history_command(event, command, parts):
                 # 创建一个模拟的 event 对象
                 # Telethon 的 process_forward_rule 需要 event 对象
                 class MessageEvent:
-                    def __init__(self, msg):
+                    def __init__(self, msg, client):
                         self.message = msg
                         self.chat_id = msg.chat_id
+                        self.client = client
 
                     async def get_chat(self):
                         return await self.message.get_chat()
 
-                # 使用消息创建事件对象
-                msg_event = MessageEvent(message)
-
                 # 获取要使用的客户端
                 client = await get_bot_client() if rule.use_bot else user_client
+
+                # 使用消息创建事件对象
+                msg_event = MessageEvent(message, client)
 
                 # 调用转发处理流程
                 result = await process_forward_rule(
