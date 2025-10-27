@@ -2396,6 +2396,7 @@ async def handle_forward_history_command(event, command, parts):
 
         # 获取历史消息
         messages = []
+        messages_debug = []  # 用于调试的消息信息列表
         if use_date_range:
             # 使用日期范围获取消息
             # Telethon 的 iter_messages:
@@ -2417,12 +2418,26 @@ async def handle_forward_history_command(event, command, parts):
                 # 如果消息在范围内,添加到列表
                 if start_date <= message.date <= end_date:
                     messages.append(message)
+                    # 记录消息调试信息
+                    messages_debug.append({
+                        'id': message.id,
+                        'grouped_id': message.grouped_id,
+                        'has_media': message.media is not None,
+                        'text': message.text[:30] if message.text else None
+                    })
 
             logger.info(f'获取到 {len(messages)} 条消息')
         else:
             # 使用数量限制获取消息
             async for message in user_client.iter_messages(source_chat_id, limit=limit):
                 messages.append(message)
+                # 记录消息调试信息
+                messages_debug.append({
+                    'id': message.id,
+                    'grouped_id': message.grouped_id,
+                    'has_media': message.media is not None,
+                    'text': message.text[:30] if message.text else None
+                })
 
         if not messages:
             if progress_message:
@@ -2433,6 +2448,23 @@ async def handle_forward_history_command(event, command, parts):
             return
 
         logger.info(f'获取到 {len(messages)} 条历史消息，开始处理')
+
+        # 输出消息结构调试信息
+        logger.info('========== 历史消息结构分析 ==========')
+        grouped_messages = {}
+        for msg_info in messages_debug:
+            if msg_info['grouped_id']:
+                if msg_info['grouped_id'] not in grouped_messages:
+                    grouped_messages[msg_info['grouped_id']] = []
+                grouped_messages[msg_info['grouped_id']].append(msg_info)
+
+        logger.info(f'单条消息数量: {len(messages_debug) - sum(len(v) for v in grouped_messages.values())}')
+        logger.info(f'媒体组数量: {len(grouped_messages)}')
+        for gid, msgs in grouped_messages.items():
+            logger.info(f'  媒体组 {gid}: {len(msgs)} 条消息')
+            for msg in msgs:
+                logger.info(f'    - 消息ID: {msg["id"]}, 有媒体: {msg["has_media"]}, 文本: {msg["text"]}')
+        logger.info('=======================================')
 
         # 反转消息列表，从最早的消息开始转发
         messages.reverse()
